@@ -24,17 +24,25 @@ export function getArchitectPrompt(): string {
 /**
  * Phase 2 — The Coder
  * High-reasoning model (Claude 3.5 Sonnet / GPT-4o)
- * Receives the answers, outputs a single clean App.tsx.
+ * Receives the answers (or iteration request), outputs a single clean App.tsx.
  */
-export function getCoderPrompt(userDescription: string, answers: string): string {
+export function getCoderPrompt(
+  userDescription: string,
+  answers: string,
+  currentCode?: string
+): string {
+  const existingCodeSection = currentCode
+    ? `\n## קוד קיים לעדכון (שמור על הפונקציונליות הקיימת ועדכן רק לפי הבקשה החדשה):\n\`\`\`tsx\n${currentCode}\n\`\`\`\n`
+    : "";
+
   return `אתה מפתח React Native מומחה. בהתבסס על הדרישות הבאות, כתוב קובץ App.tsx אחד מלא ועובד.
 
 ## תיאור האפליקציה:
 ${userDescription}
 
-## תשובות המשתמש לשאלות:
+## תשובות / בקשת המשתמש:
 ${answers}
-
+${existingCodeSection}
 ## כללי הפלט — חובה לקיים:
 
 1. **קובץ יחיד בלבד** — כל הלוגיקה, המסכים, ה-state וה-styles בקובץ אחד: App.tsx

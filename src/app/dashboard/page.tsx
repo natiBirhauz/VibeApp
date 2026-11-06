@@ -18,12 +18,22 @@ import {
   ChevronUp,
   Menu,
   X,
+  QrCode,
+  ShieldCheck,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
+import { QRCodeSVG } from "qrcode.react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import VersionHistory from "@/components/VersionHistory";
 import TemplatesPanel from "@/components/TemplatesPanel";
 import { stripMarkdown } from "@/lib/ai/prompts";
@@ -51,11 +61,8 @@ interface Message {
   content: string;
 }
 
-// ─── Mock user (replace with Supabase auth) ───────────────────────────────────
 const MOCK_USER_ID = "00000000-0000-0000-0000-000000000001";
 const MOCK_PROJECT_ID = "00000000-0000-0000-0000-000000000002";
-
-// ─── Component ────────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
   const { theme, setTheme } = useTheme();
@@ -66,14 +73,13 @@ export default function DashboardPage() {
       id: "welcome",
       role: "assistant",
       content:
-        "שלום! אני כאן לעזור לך לבנות אפליקציה אנדרואיד. 📱\n\nתאר לי מה האפליקציה שלך עושה — בכמה משפטים בעברית — ואתחיל לשאול אותך כמה שאלות.",
+        "שלום! אני כאן לעזור לך לבנות אפליקציה לאנדרואיד. 📱\n\nתאר לי מה האפליקציה שלך עושה — או בחר תבנית מוכנה בחינם מלמעלה — ונצא לדרך!",
     },
   ]);
   const [input, setInput] = useState("");
   const [phase, setPhase] = useState<Phase>("idle");
   const [isStreaming, setIsStreaming] = useState(false);
   const [userDescription, setUserDescription] = useState("");
-  const [architectAnswers, setArchitectAnswers] = useState("");
 
   // App code & versions
   const [currentCode, setCurrentCode] = useState("");
@@ -84,8 +90,9 @@ export default function DashboardPage() {
   const [buildStatus, setBuildStatus] = useState<BuildStatus>("idle");
   const [buildId, setBuildId] = useState<string | null>(null);
   const [apkUrl, setApkUrl] = useState<string | null>(null);
+  const [showApkModal, setShowApkModal] = useState(false);
 
-  // Credits
+  // Credits (persisted in localStorage when running without DB)
   const [credits, setCredits] = useState(15);
 
   // UI panels
@@ -96,6 +103,20 @@ export default function DashboardPage() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Load saved credits on mount
+  useEffect(() => {
+    const saved = localStorage.getItem("vibeapp_credits");
+    if (saved !== null) {
+      const parsed = parseInt(saved, 10);
+      if (!isNaN(parsed)) setCredits(parsed);
+    }
+  }, []);
+
+  const updateCredits = useCallback((nextBalance: number) => {
+    setCredits(nextBalance);
+    localStorage.setItem("vibeapp_credits", String(nextBalance));
+  }, []);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -116,6 +137,7 @@ export default function DashboardPage() {
         if (data.status === "completed" && data.apkUrl) {
           setApkUrl(data.apkUrl);
           setBuildStatus("ready");
+          setShowApkModal(true);
           clearInterval(pollingRef.current!);
           toast.success("האפליקציה מוכנה להורדה! 🎉");
         } else if (data.status === "failed") {
@@ -156,6 +178,28 @@ export default function DashboardPage() {
     const trimmed = input.trim();
     if (!trimmed || isStreaming) return;
 
+    // Determine phase and credit cost before sending
+    let nextPhase: Phase;
+    let expectedCost = 0;
+
+    if (phase === "idle") {
+      nextPhase = "architect";
+      expectedCost = 10; // Initial app creation (covers questions + first code build)
+    } else if (phase === "architect") {
+      nextPhase = "coder";
+      expectedCost = 0; // Already paid in phase 1!
+    } else {
+      nextPhase = "coder";
+      expectedCost = 2; // Iteration on existing code
+    }
+
+    if (credits < expectedCost) {
+      toast.error(
+        `אין מספיק קרדיטים לפעולה זו (נדרשים ${expectedCost} קרדיטים, יתרה: ${credits}).`
+      );
+      return;
+    }
+
     setInput("");
     const userMsg: Message = {
       id: Date.now().toString(),
@@ -164,17 +208,11 @@ export default function DashboardPage() {
     };
     setMessages((prev) => [...prev, userMsg]);
 
-    // Determine phase
-    let nextPhase: Phase;
     if (phase === "idle") {
-      nextPhase = "architect";
       setUserDescription(trimmed);
-    } else if (phase === "architect") {
-      nextPhase = "coder";
-      setArchitectAnswers(trimmed);
-    } else {
-      nextPhase = "coder"; // iteration
     }
+
+    const previousPhase = phase;
     setPhase(nextPhase);
     setIsStreaming(true);
 
@@ -193,16 +231,17 @@ export default function DashboardPage() {
           phase: nextPhase === "coder" ? "coder" : "architect",
           userId: MOCK_USER_ID,
           projectId: MOCK_PROJECT_ID,
-          userDescription,
+          userDescription: phase === "idle" ? trimmed : userDescription,
           answers: trimmed,
+          currentCode: currentCode || undefined,
         }),
       });
 
-      if (res.status === 402) {
-        const err = await res.json();
-        toast.error(err.error ?? "אין מספיק קרדיטים");
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        toast.error(err.error ?? "שגיאה בביצוע הפעולה. הקרדיטים לא חויבו.");
         setMessages((prev) => prev.filter((m) => m.id !== assistantMsgId));
-        setPhase(phase); // revert
+        setPhase(previousPhase);
         return;
       }
 
@@ -227,10 +266,16 @@ export default function DashboardPage() {
 
             if (parsed.delta) {
               fullText += parsed.delta;
+              // Don't flood chat bubble with raw code during coder phase
+              const displayContent =
+                nextPhase === "coder"
+                  ? "⚙️ כותב ומקמפל את קוד האפליקציה לסימולטור..."
+                  : fullText;
+
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantMsgId
-                    ? { ...m, content: fullText }
+                    ? { ...m, content: displayContent }
                     : m
                 )
               );
@@ -238,7 +283,9 @@ export default function DashboardPage() {
 
             if (parsed.done) {
               if (parsed.newBalance !== null && parsed.newBalance !== undefined) {
-                setCredits(parsed.newBalance);
+                updateCredits(parsed.newBalance);
+              } else if (expectedCost > 0) {
+                updateCredits(Math.max(0, credits - expectedCost));
               }
 
               // If coder phase — extract and render code
@@ -248,6 +295,23 @@ export default function DashboardPage() {
                   setCurrentCode(code);
                   saveSnapshot(code, trimmed.slice(0, 40));
                   setPhase("done");
+                  setMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === assistantMsgId
+                        ? {
+                            ...m,
+                            content:
+                              "✅ האפליקציה מוכנה ומוצגת בסימולטור!\n\nאפשר לבדוק אותה עכשיו, לבקש שינויים (2 קרדיטים לעריכה), או ללחוץ על **ייצא APK** להורדה לטלפון.",
+                          }
+                        : m
+                    )
+                  );
+                } else {
+                  setMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === assistantMsgId ? { ...m, content: fullText } : m
+                    )
+                  );
                 }
               } else {
                 setPhase("architect");
@@ -258,13 +322,23 @@ export default function DashboardPage() {
           }
         }
       }
-    } catch (err) {
-      toast.error("שגיאה בשליחת ההודעה. נסה שוב.");
+    } catch {
+      toast.error("שגיאה בשליחת ההודעה. הקרדיטים שלך שמורים.");
       setMessages((prev) => prev.filter((m) => m.id !== assistantMsgId));
+      setPhase(previousPhase);
     } finally {
       setIsStreaming(false);
     }
-  }, [input, isStreaming, phase, userDescription, saveSnapshot]);
+  }, [
+    input,
+    isStreaming,
+    phase,
+    credits,
+    userDescription,
+    currentCode,
+    saveSnapshot,
+    updateCredits,
+  ]);
 
   // ── Handle Enter key ──────────────────────────────────────────────────────────
 
@@ -281,6 +355,7 @@ export default function DashboardPage() {
     (tmpl: StarterTemplate) => {
       setCurrentCode(tmpl.code);
       saveSnapshot(tmpl.code, tmpl.nameHe);
+      setUserDescription(tmpl.nameHe + " - " + tmpl.description);
       setPhase("done");
       setShowTemplates(false);
 
@@ -289,7 +364,7 @@ export default function DashboardPage() {
         {
           id: Date.now().toString(),
           role: "assistant",
-          content: `טענתי את התבנית **${tmpl.nameHe}** 🎉\n\nהיא מופיעה בסימולטור. תוכל לבקש עריכות — כל שינוי עולה 2 קרדיטים בלבד.`,
+          content: `טענתי את התבנית **${tmpl.nameHe}** בחינם! 🎉\n\nהיא פועלת כעת בסימולטור. תוכל לבקש כל שינוי או התאמה אישית בעלות של 2 קרדיטים בלבד, או לייצא ל-APK.`,
         },
       ]);
     },
@@ -301,10 +376,10 @@ export default function DashboardPage() {
   const restoreSnapshot = useCallback((snap: VersionSnapshot) => {
     setCurrentCode(snap.code);
     setCurrentVersion(snap.version);
-    toast.success(`שוחזרה גרסה ${snap.version}`);
+    toast.success(`שוחזרה גרסה ${snap.version} (ללא עלות קרדיטים)`);
   }, []);
 
-  // ── Auto-heal ─────────────────────────────────────────────────────────────────
+  // ── Auto-heal (Free — never charges user credits) ─────────────────────────────
 
   const handleSimulatorError = useCallback(
     async (error: string, code: string) => {
@@ -323,7 +398,7 @@ export default function DashboardPage() {
         if (res.ok) {
           const { fixedCode } = await res.json();
           setCurrentCode(fixedCode);
-          toast.info("קוד תוקן אוטומטית ✨");
+          toast.info("הקוד תוקן אוטומטית (ללא חיוב קרדיטים) ✨");
         }
       } catch {
         toast.error("לא ניתן לתקן אוטומטית");
@@ -338,6 +413,11 @@ export default function DashboardPage() {
 
   const buildApk = useCallback(async () => {
     if (!currentCode || buildStatus === "building") return;
+    if (credits < 20) {
+      toast.error("נדרשים לפחות 20 קרדיטים לייצוא קובץ APK.");
+      return;
+    }
+
     setBuildStatus("building");
     setApkUrl(null);
     try {
@@ -348,21 +428,27 @@ export default function DashboardPage() {
           projectId: MOCK_PROJECT_ID,
           userId: MOCK_USER_ID,
           appName: "VibeApp",
+          appCode: currentCode,
         }),
       });
       const data = await res.json();
       if (!res.ok) {
-        toast.error(data.error ?? "שגיאה בהפעלת הבנייה");
+        toast.error(data.error ?? "שגיאה בהפעלת הבנייה (לא חויבו קרדיטים)");
         setBuildStatus("idle");
         return;
       }
+      if (data.newBalance !== null && data.newBalance !== undefined) {
+        updateCredits(data.newBalance);
+      } else {
+        updateCredits(Math.max(0, credits - 20));
+      }
       setBuildId(data.buildId);
-      toast.info("הבנייה התחילה! ~75 שניות...");
+      toast.info("הבנייה בענן התחילה! ~75 שניות...");
     } catch {
-      toast.error("שגיאת רשת");
+      toast.error("שגיאת רשת — הקרדיטים לא חויבו");
       setBuildStatus("idle");
     }
-  }, [currentCode, buildStatus]);
+  }, [currentCode, buildStatus, credits, updateCredits]);
 
   // ── Render ────────────────────────────────────────────────────────────────────
 
@@ -393,17 +479,17 @@ export default function DashboardPage() {
               <span className="font-bold">{credits}</span>
               <span className="text-muted-foreground font-normal">קרדיטים</span>
             </Badge>
-            <span className="text-xs text-primary opacity-0 group-hover:opacity-100 transition-opacity hidden sm:block">
-              + הוסף
+            <span className="text-xs text-primary font-medium opacity-80 group-hover:opacity-100 transition-opacity hidden sm:block">
+              + טען קרדיטים
             </span>
           </Link>
         </div>
 
         {/* Logo */}
-        <div className="flex items-center gap-2">
+        <Link href="/" className="flex items-center gap-2">
           <Smartphone className="w-5 h-5 text-primary" />
           <span className="font-bold text-foreground text-lg">VibeApp</span>
-        </div>
+        </Link>
 
         {/* Theme toggle */}
         <button
@@ -422,8 +508,10 @@ export default function DashboardPage() {
       {/* ── Main content ── */}
       <div className="flex flex-1 overflow-hidden">
         {/* ── Left panel: Phone simulator ── */}
-        <div className="hidden lg:flex flex-col items-center justify-start gap-4 p-6 border-l border-border bg-muted/20 overflow-y-auto flex-shrink-0"
-          style={{ width: 440 }}>
+        <div
+          className="hidden lg:flex flex-col items-center justify-start gap-4 p-6 border-l border-border bg-muted/20 overflow-y-auto flex-shrink-0"
+          style={{ width: 440 }}
+        >
           <PhoneSimulator
             code={currentCode}
             onError={handleSimulatorError}
@@ -434,14 +522,12 @@ export default function DashboardPage() {
           {currentCode && (
             <div className="flex flex-col items-center gap-2 w-full max-w-sm">
               {buildStatus === "idle" && (
-                <Button
-                  onClick={buildApk}
-                  className="w-full gap-2"
-                  size="lg"
-                >
+                <Button onClick={buildApk} className="w-full gap-2" size="lg">
                   <Download className="w-5 h-5" />
-                  ייצא APK
-                  <Badge variant="secondary" className="text-xs">20 קרדיטים</Badge>
+                  ייצא APK לטלפון
+                  <Badge variant="secondary" className="text-xs">
+                    20 קרדיטים
+                  </Badge>
                 </Button>
               )}
 
@@ -449,27 +535,22 @@ export default function DashboardPage() {
                 <div className="w-full bg-muted rounded-xl p-4 text-center space-y-2">
                   <Loader2 className="w-6 h-6 animate-spin text-primary mx-auto" />
                   <p className="text-sm font-medium text-foreground">
-                    בונה את האפליקציה שלך...
+                    מקמפל וחותם קובץ APK בענן...
                   </p>
-                  <p className="text-xs text-muted-foreground">
-                    ~75 שניות
-                  </p>
+                  <p className="text-xs text-muted-foreground">~75 שניות</p>
                 </div>
               )}
 
               {buildStatus === "ready" && apkUrl && (
                 <div className="w-full flex flex-col gap-2">
-                  <a
-                    href={apkUrl}
-                    download="my-app.apk"
-                    className="w-full flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white rounded-xl py-3 px-4 font-semibold text-sm transition-colors"
+                  <Button
+                    onClick={() => setShowApkModal(true)}
+                    className="w-full gap-2 bg-green-600 hover:bg-green-700 text-white"
+                    size="lg"
                   >
-                    <Download className="w-4 h-4" />
-                    הורד APK
-                  </a>
-                  <p className="text-xs text-center text-muted-foreground leading-relaxed">
-                    פתח את הקובץ בטלפון ← אשר התקנה ← האפליקציה מוכנה
-                  </p>
+                    <QrCode className="w-5 h-5" />
+                    הורד APK / סרוק QR
+                  </Button>
                 </div>
               )}
 
@@ -506,7 +587,7 @@ export default function DashboardPage() {
               }}
             >
               <LayoutTemplate className="w-3.5 h-3.5" />
-              תבניות
+              תבניות מוכנות (חינם)
             </Button>
 
             {snapshots.length > 0 && (
@@ -529,12 +610,9 @@ export default function DashboardPage() {
               </Button>
             )}
 
-            {/* Mobile simulator toggle */}
-            <div className="lg:hidden mr-auto">
-              <Badge variant="outline" className="text-xs gap-1">
-                <Zap className="w-3 h-3 text-primary" />
-                {credits}
-              </Badge>
+            <div className="mr-auto hidden sm:flex items-center gap-1 text-xs text-muted-foreground">
+              <ShieldCheck className="w-3.5 h-3.5 text-primary" />
+              <span>הגנת קרדיטים פעילה</span>
             </div>
           </div>
 
@@ -559,7 +637,9 @@ export default function DashboardPage() {
             {messages.map((msg) => (
               <div
                 key={msg.id}
-                className={`flex ${msg.role === "user" ? "justify-start" : "justify-end"}`}
+                className={`flex ${
+                  msg.role === "user" ? "justify-start" : "justify-end"
+                }`}
               >
                 <div
                   className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words ${
@@ -592,40 +672,39 @@ export default function DashboardPage() {
                   <Button onClick={buildApk} className="w-full gap-2" size="sm">
                     <Download className="w-4 h-4" />
                     ייצא APK
-                    <Badge variant="secondary" className="text-xs">20 קרדיטים</Badge>
+                    <Badge variant="secondary" className="text-xs">
+                      20 קרדיטים
+                    </Badge>
                   </Button>
                 )}
                 {buildStatus === "building" && (
                   <div className="flex items-center justify-center gap-2 p-2">
                     <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                    <span className="text-sm text-muted-foreground">בונה... ~75 שניות</span>
+                    <span className="text-sm text-muted-foreground">
+                      בונה... ~75 שניות
+                    </span>
                   </div>
                 )}
                 {buildStatus === "ready" && apkUrl && (
-                  <div className="flex flex-col gap-1.5">
-                    <a
-                      href={apkUrl}
-                      download="my-app.apk"
-                      className="w-full flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white rounded-xl py-2.5 px-4 font-semibold text-sm transition-colors"
-                    >
-                      <Download className="w-4 h-4" />
-                      הורד APK
-                    </a>
-                    <p className="text-xs text-center text-muted-foreground">
-                      פתח בטלפון ← אשר ← מוכן!
-                    </p>
-                  </div>
+                  <Button
+                    onClick={() => setShowApkModal(true)}
+                    className="w-full gap-2 bg-green-600 hover:bg-green-700 text-white"
+                    size="sm"
+                  >
+                    <QrCode className="w-4 h-4" />
+                    הורד APK / QR
+                  </Button>
                 )}
               </div>
             ) : (
               <p className="text-xs text-muted-foreground">
-                תאר אפליקציה לראות תצוגה מקדימה
+                תאר אפליקציה או בחר תבנית לתצוגה מקדימה
               </p>
             )}
           </div>
 
           {/* Input */}
-          <div className="flex gap-2 p-3 border-t border-border bg-card flex-shrink-0">
+          <div className="flex gap-2 p-3 border-t border-border bg-card flex-shrink-0 items-center">
             <Button
               onClick={sendMessage}
               disabled={isStreaming || !input.trim()}
@@ -642,12 +721,13 @@ export default function DashboardPage() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
+              maxLength={1500}
               placeholder={
                 phase === "idle"
-                  ? "תאר את האפליקציה שלך..."
+                  ? "תאר את האפליקציה שלך (10 קרדיטים ליצירה מלאה)..."
                   : phase === "architect"
-                  ? "ענה על שאלות ה-AI..."
-                  : "בקש שינוי או עריכה..."
+                  ? "ענה על שאלות ה-AI כדי לבנות את האפליקציה (כלול במחיר)..."
+                  : "בקש שינוי או תוספת (2 קרדיטים לעריכה)..."
               }
               className="resize-none min-h-0 h-10 py-2.5 flex-1"
               disabled={isStreaming}
@@ -656,6 +736,48 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* ── QR & APK Download Modal ── */}
+      <Dialog open={showApkModal} onOpenChange={setShowApkModal}>
+        <DialogContent className="sm:max-w-md text-right" dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-bold flex items-center gap-2">
+              🎉 ה-APK שלך מוכן להתקנה!
+            </DialogTitle>
+            <DialogDescription>
+              סרוק את הברקוד עם מצלמת הטלפון או לחץ על כפתור ההורדה הישירה.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-col items-center gap-5 py-4">
+            {apkUrl && (
+              <div className="bg-white p-4 rounded-2xl border shadow-sm">
+                <QRCodeSVG value={apkUrl} size={180} />
+              </div>
+            )}
+
+            {apkUrl && (
+              <a
+                href={apkUrl}
+                download="vibeapp-release.apk"
+                className="w-full flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white rounded-xl py-3 px-4 font-semibold text-sm transition-colors"
+              >
+                <Download className="w-4 h-4" />
+                הורד קובץ APK ישירות
+              </a>
+            )}
+
+            <div className="w-full bg-muted/60 rounded-xl p-4 text-xs space-y-2 text-foreground">
+              <p className="font-bold text-sm">איך מתקינים באנדרואיד (3 שלבים):</p>
+              <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
+                <li>סרוק את ה-QR או לחץ על כפתור ההורדה בטלפון.</li>
+                <li>פתח את הקובץ שירד ואשר &quot;התקנה ממקור לא מוכר&quot; במידה ונשאל.</li>
+                <li>לחץ &quot;התקן&quot; — והאפליקציה שלך תופיע על מסך הבית!</li>
+              </ol>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

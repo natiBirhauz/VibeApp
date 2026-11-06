@@ -28,6 +28,7 @@ export interface Database {
           credits_balance?: number;
           created_at?: string;
         };
+        Relationships: [];
       };
       projects: {
         Row: {
@@ -63,6 +64,7 @@ export interface Database {
           build_run_id?: string | null;
           created_at?: string;
         };
+        Relationships: [];
       };
       transactions: {
         Row: {
@@ -89,17 +91,27 @@ export interface Database {
           payment_id?: string | null;
           created_at?: string;
         };
+        Relationships: [];
       };
+    };
+    Views: {
+      [_ in never]: never;
     };
     Functions: {
       deduct_credits: {
         Args: { p_user_id: string; p_amount: number };
-        Returns: void;
+        Returns: undefined;
       };
       add_credits: {
         Args: { p_user_id: string; p_amount: number };
-        Returns: void;
+        Returns: undefined;
       };
+    };
+    Enums: {
+      [_ in never]: never;
+    };
+    CompositeTypes: {
+      [_ in never]: never;
     };
   };
 }

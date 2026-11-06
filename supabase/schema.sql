@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS public.transactions (
   user_id       uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
   amount_paid   numeric(10,2) NOT NULL DEFAULT 0,
   credits_added integer NOT NULL,
-  payment_id    text,
+  payment_id    text UNIQUE,
   created_at    timestamptz NOT NULL DEFAULT now()
 );
 
