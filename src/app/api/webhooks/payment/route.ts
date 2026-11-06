@@ -6,16 +6,26 @@ import { isSupabaseConfigured } from "@/lib/credits-guard";
 export const runtime = "nodejs";
 
 function verifyHmac(payload: string, signature: string, secret: string): boolean {
-  const expected = crypto
+  const expectedHex = crypto
     .createHmac("sha256", secret)
     .update(payload)
     .digest("hex");
+  const expectedBase64 = crypto
+    .createHmac("sha256", secret)
+    .update(payload)
+    .digest("base64");
+
   const received = signature.startsWith("sha256=")
     ? signature.slice(7)
     : signature;
+
+  if (received === expectedHex || received === expectedBase64) {
+    return true;
+  }
+
   try {
     return crypto.timingSafeEqual(
-      Buffer.from(expected, "hex"),
+      Buffer.from(expectedHex, "hex"),
       Buffer.from(received, "hex")
     );
   } catch {
@@ -36,6 +46,8 @@ export async function POST(req: NextRequest) {
   const signature =
     req.headers.get("x-webhook-signature") ??
     req.headers.get("x-hub-signature-256") ??
+    req.headers.get("x-signature") ?? // Lemon Squeezy
+    req.headers.get("hash") ??        // PayPlus
     req.headers.get("stripe-signature") ??
     "";
 
@@ -50,66 +62,112 @@ export async function POST(req: NextRequest) {
   try {
     payload = JSON.parse(body);
   } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+    // Support form-urlencoded callbacks (Grow/Meshulam sometimes send form data)
+    try {
+      const params = new URLSearchParams(body);
+      payload = Object.fromEntries(params.entries());
+    } catch {
+      return NextResponse.json({ error: "Invalid payload format" }, { status: 400 });
+    }
   }
 
-  // Normalize event type across Stripe / Grow / PayPlus / Morning
-  const eventType =
-    (payload.event as string) ??
-    (payload.type as string) ??
-    (payload.status as string) ??
-    "";
+  // ── Normalize across PayPlus, Grow, Morning, Lemon Squeezy, and Stripe ──
+
+  const txObj = (payload.transaction as Record<string, unknown>) ?? {};
+  const dataObj =
+    ((payload.data as Record<string, unknown>)?.object as Record<string, unknown>) ??
+    (payload.data as Record<string, unknown>) ??
+    payload;
+  const metaObj = (payload.meta as Record<string, unknown>) ?? {};
+
+  const eventType = String(
+    payload.event ??
+      payload.type ??
+      metaObj.event_name ?? // Lemon Squeezy: "order_created"
+      txObj.status_code ??  // PayPlus: "000"
+      payload.status_code ??
+      payload.status ??
+      ""
+  );
 
   const isSuccess =
+    eventType === "000" || // PayPlus approved
+    eventType === "1" ||   // Grow approved
+    eventType === "order_created" || // Lemon Squeezy
     eventType === "payment.success" ||
     eventType === "charge.succeeded" ||
     eventType === "checkout.session.completed" ||
     eventType === "payment_intent.succeeded" ||
-    eventType === "completed";
+    eventType === "completed" ||
+    payload.transaction_type === "Charge";
 
   if (!isSuccess) {
     return NextResponse.json({ received: true });
   }
 
-  // Extract metadata (support nested data.object for Stripe)
-  const dataObj =
-    ((payload.data as Record<string, unknown>)?.object as Record<string, unknown>) ??
-    payload;
+  // Extract custom metadata across gateways
+  let morningCustom: Record<string, unknown> = {};
+  if (typeof payload.custom === "string") {
+    try {
+      morningCustom = JSON.parse(payload.custom);
+    } catch {
+      // ignore
+    }
+  }
 
-  const metadata =
-    (dataObj.metadata as Record<string, string>) ??
+  const customData =
+    (metaObj.custom_data as Record<string, string>) ?? // Lemon Squeezy
+    (dataObj.metadata as Record<string, string>) ??    // Stripe
     (payload.metadata as Record<string, string>) ??
     {};
 
-  const userId =
-    metadata.user_id ??
-    (dataObj.customer_id as string) ??
-    (payload.customer_id as string) ??
-    null;
+  const userId = String(
+    customData.user_id ??
+      morningCustom.user_id ??
+      txObj.more_info ??       // PayPlus
+      dataObj.more_info ??
+      payload.cField1 ??       // Grow / Meshulam
+      dataObj.cField1 ??
+      payload.customer_id ??
+      ""
+  ).trim();
 
   const creditsAdded = parseInt(
     String(
-      metadata.credits_added ??
-      dataObj.credits ??
-      payload.credits ??
-      "0"
+      customData.credits_added ??
+        morningCustom.credits_added ??
+        txObj.more_info_1 ??   // PayPlus
+        dataObj.more_info_1 ??
+        payload.cField2 ??     // Grow / Meshulam
+        dataObj.cField2 ??
+        payload.credits ??
+        "0"
     ),
     10
   );
 
   const rawAmount =
-    (dataObj.amount_total as number) ??
-    (dataObj.amount as number) ??
-    (payload.amount as number) ??
+    txObj.amount ??
+    payload.sum ??
+    payload.amount ??
+    (dataObj.attributes as Record<string, unknown>)?.total ??
+    dataObj.amount_total ??
     0;
 
-  const amountPaid = parseFloat(String(rawAmount)) / 100;
+  let amountPaid = parseFloat(String(rawAmount));
+  // Stripe & LemonSqueezy report in cents/agorot
+  if (amountPaid > 200) {
+    amountPaid = amountPaid / 100;
+  }
 
-  const paymentId =
-    (dataObj.id as string) ??
-    (payload.id as string) ??
-    (payload.payment_id as string) ??
-    null;
+  const paymentId = String(
+    txObj.uid ??
+      payload.processId ??
+      dataObj.id ??
+      payload.id ??
+      payload.payment_id ??
+      ""
+  ).trim();
 
   if (!userId || !paymentId || creditsAdded <= 0 || creditsAdded > 5000) {
     return NextResponse.json(

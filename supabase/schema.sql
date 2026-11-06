@@ -149,8 +149,13 @@ END;
 $$;
 
 -- ============================================================
--- INDEXES
+-- INDEXES & STORAGE BUCKET
 -- ============================================================
 
 CREATE INDEX IF NOT EXISTS idx_projects_user_id ON public.projects(user_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON public.transactions(user_id);
+
+-- Create public 'apks' storage bucket for APK downloads
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('apks', 'apks', true)
+ON CONFLICT (id) DO NOTHING;

@@ -12,14 +12,14 @@ import {
   Sun,
   History,
   LayoutTemplate,
-  Zap,
   RotateCcw,
   ChevronDown,
   ChevronUp,
   Menu,
   X,
   QrCode,
-  ShieldCheck,
+  CreditCard,
+  User,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
@@ -37,6 +37,7 @@ import {
 import VersionHistory from "@/components/VersionHistory";
 import TemplatesPanel from "@/components/TemplatesPanel";
 import { stripMarkdown } from "@/lib/ai/prompts";
+import { createClient } from "@/lib/supabase/client";
 import type { VersionSnapshot } from "@/lib/supabase/types";
 import type { StarterTemplate } from "@/lib/templates/starters";
 
@@ -61,11 +62,16 @@ interface Message {
   content: string;
 }
 
-const MOCK_USER_ID = "00000000-0000-0000-0000-000000000001";
-const MOCK_PROJECT_ID = "00000000-0000-0000-0000-000000000002";
+const DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000001";
+const DEFAULT_PROJECT_ID = "00000000-0000-0000-0000-000000000002";
 
 export default function DashboardPage() {
   const { theme, setTheme } = useTheme();
+
+  // Auth & User state
+  const [userId, setUserId] = useState<string>(DEFAULT_USER_ID);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [projectId, setProjectId] = useState<string>(DEFAULT_PROJECT_ID);
 
   // Chat state
   const [messages, setMessages] = useState<Message[]>([
@@ -73,7 +79,7 @@ export default function DashboardPage() {
       id: "welcome",
       role: "assistant",
       content:
-        "שלום! אני כאן לעזור לך לבנות אפליקציה לאנדרואיד. 📱\n\nתאר לי מה האפליקציה שלך עושה — או בחר תבנית מוכנה בחינם מלמעלה — ונצא לדרך!",
+        "ברוך הבא ל-VibeApp Studio.\nתאר את האפליקציה שתרצה לפתח או בחר תבנית מוכנה מסרגל הכלים העליון.",
     },
   ]);
   const [input, setInput] = useState("");
@@ -92,7 +98,7 @@ export default function DashboardPage() {
   const [apkUrl, setApkUrl] = useState<string | null>(null);
   const [showApkModal, setShowApkModal] = useState(false);
 
-  // Credits (persisted in localStorage when running without DB)
+  // Credits
   const [credits, setCredits] = useState(15);
 
   // UI panels
@@ -104,13 +110,56 @@ export default function DashboardPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Load saved credits on mount
+  // Load user & credits from Supabase or localStorage
   useEffect(() => {
     const saved = localStorage.getItem("vibeapp_credits");
     if (saved !== null) {
       const parsed = parseInt(saved, 10);
       if (!isNaN(parsed)) setCredits(parsed);
     }
+
+    const isSupabaseConfigured = Boolean(
+      process.env.NEXT_PUBLIC_SUPABASE_URL &&
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY &&
+        !process.env.NEXT_PUBLIC_SUPABASE_URL.includes("your-project.supabase.co")
+    );
+
+    if (!isSupabaseConfigured) return;
+
+    const supabase = createClient();
+    supabase.auth.getUser().then(async ({ data: { user } }) => {
+      if (!user) return;
+      setUserId(user.id);
+      setUserEmail(user.email ?? null);
+
+      const { data: profileData } = await supabase
+        .from("profiles")
+        .select("credits_balance")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      const profile = profileData as { credits_balance: number } | null;
+      if (profile && typeof profile.credits_balance === "number") {
+        setCredits(profile.credits_balance);
+      }
+
+      const { data: projectData } = await supabase
+        .from("projects")
+        .select("id, current_code")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      const existingProject = projectData as { id: string; current_code: string | null } | null;
+      if (existingProject) {
+        setProjectId(existingProject.id);
+        if (existingProject.current_code) {
+          setCurrentCode(existingProject.current_code);
+          setPhase("done");
+        }
+      }
+    });
   }, []);
 
   const updateCredits = useCallback((nextBalance: number) => {
@@ -130,7 +179,7 @@ export default function DashboardPage() {
     pollingRef.current = setInterval(async () => {
       try {
         const res = await fetch(
-          `/api/build-status?buildId=${buildId}&projectId=${MOCK_PROJECT_ID}`
+          `/api/build-status?buildId=${buildId}&projectId=${projectId}`
         );
         const data = await res.json();
 
@@ -139,7 +188,7 @@ export default function DashboardPage() {
           setBuildStatus("ready");
           setShowApkModal(true);
           clearInterval(pollingRef.current!);
-          toast.success("האפליקציה מוכנה להורדה! 🎉");
+          toast.success("בניית ה-APK הושלמה בהצלחה");
         } else if (data.status === "failed") {
           setBuildStatus("failed");
           clearInterval(pollingRef.current!);
@@ -153,7 +202,7 @@ export default function DashboardPage() {
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current);
     };
-  }, [buildStatus, buildId]);
+  }, [buildStatus, buildId, projectId]);
 
   // ── Save snapshot ────────────────────────────────────────────────────────────
 
@@ -178,24 +227,23 @@ export default function DashboardPage() {
     const trimmed = input.trim();
     if (!trimmed || isStreaming) return;
 
-    // Determine phase and credit cost before sending
     let nextPhase: Phase;
     let expectedCost = 0;
 
     if (phase === "idle") {
       nextPhase = "architect";
-      expectedCost = 10; // Initial app creation (covers questions + first code build)
+      expectedCost = 10;
     } else if (phase === "architect") {
       nextPhase = "coder";
-      expectedCost = 0; // Already paid in phase 1!
+      expectedCost = 0;
     } else {
       nextPhase = "coder";
-      expectedCost = 2; // Iteration on existing code
+      expectedCost = 2;
     }
 
     if (credits < expectedCost) {
       toast.error(
-        `אין מספיק קרדיטים לפעולה זו (נדרשים ${expectedCost} קרדיטים, יתרה: ${credits}).`
+        `יתרת הקרדיטים אינה מספיקה לפעולה זו (נדרשים ${expectedCost} קרדיטים).`
       );
       return;
     }
@@ -229,8 +277,8 @@ export default function DashboardPage() {
         body: JSON.stringify({
           message: trimmed,
           phase: nextPhase === "coder" ? "coder" : "architect",
-          userId: MOCK_USER_ID,
-          projectId: MOCK_PROJECT_ID,
+          userId,
+          projectId,
           userDescription: phase === "idle" ? trimmed : userDescription,
           answers: trimmed,
           currentCode: currentCode || undefined,
@@ -239,7 +287,7 @@ export default function DashboardPage() {
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        toast.error(err.error ?? "שגיאה בביצוע הפעולה. הקרדיטים לא חויבו.");
+        toast.error(err.error ?? "שגיאה בביצוע הבקשה");
         setMessages((prev) => prev.filter((m) => m.id !== assistantMsgId));
         setPhase(previousPhase);
         return;
@@ -266,10 +314,9 @@ export default function DashboardPage() {
 
             if (parsed.delta) {
               fullText += parsed.delta;
-              // Don't flood chat bubble with raw code during coder phase
               const displayContent =
                 nextPhase === "coder"
-                  ? "⚙️ כותב ומקמפל את קוד האפליקציה לסימולטור..."
+                  ? "בונה את רכיבי האפליקציה ומעדכן את הסימולטור..."
                   : fullText;
 
               setMessages((prev) =>
@@ -288,7 +335,6 @@ export default function DashboardPage() {
                 updateCredits(Math.max(0, credits - expectedCost));
               }
 
-              // If coder phase — extract and render code
               if (nextPhase === "coder") {
                 const code = stripMarkdown(fullText);
                 if (code.includes("export default")) {
@@ -301,7 +347,7 @@ export default function DashboardPage() {
                         ? {
                             ...m,
                             content:
-                              "✅ האפליקציה מוכנה ומוצגת בסימולטור!\n\nאפשר לבדוק אותה עכשיו, לבקש שינויים (2 קרדיטים לעריכה), או ללחוץ על **ייצא APK** להורדה לטלפון.",
+                              "הגרסה החדשה מוכנה ומוצגת בסימולטור.\nניתן להמשיך לעדכן את האפליקציה או לייצא קובץ APK למכשיר.",
                           }
                         : m
                     )
@@ -323,7 +369,7 @@ export default function DashboardPage() {
         }
       }
     } catch {
-      toast.error("שגיאה בשליחת ההודעה. הקרדיטים שלך שמורים.");
+      toast.error("שגיאה בשליחת ההודעה");
       setMessages((prev) => prev.filter((m) => m.id !== assistantMsgId));
       setPhase(previousPhase);
     } finally {
@@ -334,13 +380,13 @@ export default function DashboardPage() {
     isStreaming,
     phase,
     credits,
+    userId,
+    projectId,
     userDescription,
     currentCode,
     saveSnapshot,
     updateCredits,
   ]);
-
-  // ── Handle Enter key ──────────────────────────────────────────────────────────
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -364,7 +410,7 @@ export default function DashboardPage() {
         {
           id: Date.now().toString(),
           role: "assistant",
-          content: `טענתי את התבנית **${tmpl.nameHe}** בחינם! 🎉\n\nהיא פועלת כעת בסימולטור. תוכל לבקש כל שינוי או התאמה אישית בעלות של 2 קרדיטים בלבד, או לייצא ל-APK.`,
+          content: `התבנית "${tmpl.nameHe}" נטענה לסימולטור.\nניתן לבקש שינויים והתאמות בצ'אט או לייצא קובץ APK.`,
         },
       ]);
     },
@@ -376,10 +422,10 @@ export default function DashboardPage() {
   const restoreSnapshot = useCallback((snap: VersionSnapshot) => {
     setCurrentCode(snap.code);
     setCurrentVersion(snap.version);
-    toast.success(`שוחזרה גרסה ${snap.version} (ללא עלות קרדיטים)`);
+    toast.success(`שוחזרה גרסה ${snap.version}`);
   }, []);
 
-  // ── Auto-heal (Free — never charges user credits) ─────────────────────────────
+  // ── Auto-heal ─────────────────────────────────────────────────────────────────
 
   const handleSimulatorError = useCallback(
     async (error: string, code: string) => {
@@ -392,13 +438,13 @@ export default function DashboardPage() {
           body: JSON.stringify({
             brokenCode: code,
             errorMessage: error,
-            userId: MOCK_USER_ID,
+            userId,
           }),
         });
         if (res.ok) {
           const { fixedCode } = await res.json();
           setCurrentCode(fixedCode);
-          toast.info("הקוד תוקן אוטומטית (ללא חיוב קרדיטים) ✨");
+          toast.info("שגיאת קומפילציה תוקנה אוטומטית");
         }
       } catch {
         toast.error("לא ניתן לתקן אוטומטית");
@@ -406,7 +452,7 @@ export default function DashboardPage() {
         setIsHealing(false);
       }
     },
-    [isHealing]
+    [isHealing, userId]
   );
 
   // ── Trigger APK build ─────────────────────────────────────────────────────────
@@ -425,15 +471,15 @@ export default function DashboardPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          projectId: MOCK_PROJECT_ID,
-          userId: MOCK_USER_ID,
+          projectId,
+          userId,
           appName: "VibeApp",
           appCode: currentCode,
         }),
       });
       const data = await res.json();
       if (!res.ok) {
-        toast.error(data.error ?? "שגיאה בהפעלת הבנייה (לא חויבו קרדיטים)");
+        toast.error(data.error ?? "שגיאה בהפעלת הבנייה");
         setBuildStatus("idle");
         return;
       }
@@ -443,23 +489,23 @@ export default function DashboardPage() {
         updateCredits(Math.max(0, credits - 20));
       }
       setBuildId(data.buildId);
-      toast.info("הבנייה בענן התחילה! ~75 שניות...");
+      toast.info("תהליך בניית ה-APK החל (~75 שניות)");
     } catch {
-      toast.error("שגיאת רשת — הקרדיטים לא חויבו");
+      toast.error("שגיאת רשת מול שרת הבנייה");
       setBuildStatus("idle");
     }
-  }, [currentCode, buildStatus, credits, updateCredits]);
+  }, [currentCode, buildStatus, credits, projectId, userId, updateCredits]);
 
   // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
     <div className="flex flex-col h-screen bg-background overflow-hidden" dir="rtl">
-      {/* ── Header ── */}
-      <header className="flex items-center justify-between px-4 py-3 border-b border-border bg-card flex-shrink-0">
+      {/* ── Top Studio Header ── */}
+      <header className="flex items-center justify-between px-4 h-14 border-b border-border bg-card flex-shrink-0">
+        {/* Right side: Brand */}
         <div className="flex items-center gap-3">
-          {/* Mobile menu toggle */}
           <button
-            className="lg:hidden p-1 rounded-lg hover:bg-muted transition-colors"
+            className="lg:hidden p-1.5 rounded-lg hover:bg-muted transition-colors"
             onClick={() => setMobileMenuOpen((v) => !v)}
           >
             {mobileMenuOpen ? (
@@ -469,47 +515,58 @@ export default function DashboardPage() {
             )}
           </button>
 
-          {/* Credits */}
-          <Link href="/pricing" className="flex items-center gap-1.5 group">
-            <Badge
-              variant="secondary"
-              className="gap-1 cursor-pointer group-hover:bg-primary/20 transition-colors"
-            >
-              <Zap className="w-3 h-3 text-primary" />
-              <span className="font-bold">{credits}</span>
-              <span className="text-muted-foreground font-normal">קרדיטים</span>
-            </Badge>
-            <span className="text-xs text-primary font-medium opacity-80 group-hover:opacity-100 transition-opacity hidden sm:block">
-              + טען קרדיטים
+          <Link href="/" className="flex items-center gap-2">
+            <div className="w-7 h-7 bg-foreground text-background rounded-md flex items-center justify-center">
+              <Smartphone className="w-4 h-4" />
+            </div>
+            <span className="font-bold text-foreground text-base tracking-tight">
+              VibeApp
+            </span>
+            <span className="text-[11px] font-medium px-1.5 py-0.5 rounded bg-secondary text-secondary-foreground border border-border hidden sm:inline-block">
+              Studio
             </span>
           </Link>
         </div>
 
-        {/* Logo */}
-        <Link href="/" className="flex items-center gap-2">
-          <Smartphone className="w-5 h-5 text-primary" />
-          <span className="font-bold text-foreground text-lg">VibeApp</span>
-        </Link>
+        {/* Left side: Balance, Account & Theme */}
+        <div className="flex items-center gap-2.5">
+          <Link
+            href="/pricing"
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border bg-secondary/50 hover:bg-secondary transition-colors text-xs"
+          >
+            <CreditCard className="w-3.5 h-3.5 text-primary" />
+            <span className="text-muted-foreground">יתרה:</span>
+            <span className="font-bold text-foreground">{credits}</span>
+            <span className="text-primary font-semibold mr-1">+ טעינה</span>
+          </Link>
 
-        {/* Theme toggle */}
-        <button
-          onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-          className="p-2 rounded-xl hover:bg-muted transition-colors"
-          aria-label="החלף ערכת נושא"
-        >
-          {theme === "dark" ? (
-            <Sun className="w-5 h-5" />
-          ) : (
-            <Moon className="w-5 h-5" />
-          )}
-        </button>
+          <Link
+            href="/login"
+            className="p-2 rounded-lg border border-border hover:bg-secondary transition-colors text-muted-foreground hover:text-foreground"
+            title={userEmail ?? "התחברות לחשבון"}
+          >
+            <User className="w-4 h-4" />
+          </Link>
+
+          <button
+            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            className="p-2 rounded-lg border border-border hover:bg-secondary transition-colors text-muted-foreground hover:text-foreground"
+            aria-label="החלף ערכת נושא"
+          >
+            {theme === "dark" ? (
+              <Sun className="w-4 h-4" />
+            ) : (
+              <Moon className="w-4 h-4" />
+            )}
+          </button>
+        </div>
       </header>
 
-      {/* ── Main content ── */}
+      {/* ── Main Split Workspace ── */}
       <div className="flex flex-1 overflow-hidden">
-        {/* ── Left panel: Phone simulator ── */}
+        {/* ── Left Column: Device Preview Canvas ── */}
         <div
-          className="hidden lg:flex flex-col items-center justify-start gap-4 p-6 border-l border-border bg-muted/20 overflow-y-auto flex-shrink-0"
+          className="hidden lg:flex flex-col items-center justify-start gap-4 p-6 border-l border-border studio-grid overflow-y-auto flex-shrink-0"
           style={{ width: 440 }}
         >
           <PhoneSimulator
@@ -518,51 +575,55 @@ export default function DashboardPage() {
             isHealing={isHealing}
           />
 
-          {/* Build button */}
+          {/* Build Controls */}
           {currentCode && (
-            <div className="flex flex-col items-center gap-2 w-full max-w-sm">
+            <div className="flex flex-col items-center gap-2 w-full max-w-[375px]">
               {buildStatus === "idle" && (
-                <Button onClick={buildApk} className="w-full gap-2" size="lg">
-                  <Download className="w-5 h-5" />
-                  ייצא APK לטלפון
-                  <Badge variant="secondary" className="text-xs">
+                <Button
+                  onClick={buildApk}
+                  className="w-full justify-between px-4 h-11 font-semibold shadow-sm"
+                >
+                  <span className="flex items-center gap-2">
+                    <Download className="w-4 h-4" />
+                    בנה וייצא קובץ APK
+                  </span>
+                  <span className="text-xs opacity-85 font-normal">
                     20 קרדיטים
-                  </Badge>
+                  </span>
                 </Button>
               )}
 
               {buildStatus === "building" && (
-                <div className="w-full bg-muted rounded-xl p-4 text-center space-y-2">
-                  <Loader2 className="w-6 h-6 animate-spin text-primary mx-auto" />
+                <div className="w-full bg-card border border-border rounded-xl p-4 text-center space-y-2 shadow-sm">
+                  <Loader2 className="w-5 h-5 animate-spin text-primary mx-auto" />
                   <p className="text-sm font-medium text-foreground">
-                    מקמפל וחותם קובץ APK בענן...
+                    מקמפל קובץ אנדרואיד בענן...
                   </p>
-                  <p className="text-xs text-muted-foreground">~75 שניות</p>
+                  <p className="text-xs text-muted-foreground">
+                    זמן משוער: כ-75 שניות
+                  </p>
                 </div>
               )}
 
               {buildStatus === "ready" && apkUrl && (
-                <div className="w-full flex flex-col gap-2">
-                  <Button
-                    onClick={() => setShowApkModal(true)}
-                    className="w-full gap-2 bg-green-600 hover:bg-green-700 text-white"
-                    size="lg"
-                  >
-                    <QrCode className="w-5 h-5" />
-                    הורד APK / סרוק QR
-                  </Button>
-                </div>
+                <Button
+                  onClick={() => setShowApkModal(true)}
+                  className="w-full gap-2 bg-emerald-600 hover:bg-emerald-700 text-white h-11 font-semibold"
+                >
+                  <QrCode className="w-4 h-4" />
+                  הורד APK / סרוק ברקוד
+                </Button>
               )}
 
               {buildStatus === "failed" && (
                 <div className="w-full flex flex-col gap-2">
-                  <p className="text-sm text-destructive text-center">
-                    הבנייה נכשלה
+                  <p className="text-xs text-destructive text-center">
+                    תהליך הבנייה נכשל
                   </p>
                   <Button
                     variant="outline"
                     onClick={() => setBuildStatus("idle")}
-                    className="w-full gap-2"
+                    className="w-full gap-2 h-10"
                   >
                     <RotateCcw className="w-4 h-4" />
                     נסה שוב
@@ -573,35 +634,35 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* ── Right panel: Chat ── */}
-        <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
-          {/* Toolbar */}
-          <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-card/60 flex-shrink-0">
+        {/* ── Right Column: Specification & Editor Chat ── */}
+        <div className="flex flex-col flex-1 min-w-0 overflow-hidden bg-background">
+          {/* Sub-header Toolbar */}
+          <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-card/50 flex-shrink-0">
             <Button
-              variant={showTemplates ? "default" : "ghost"}
+              variant={showTemplates ? "default" : "outline"}
               size="sm"
-              className="gap-1.5 text-xs h-8"
+              className="gap-1.5 text-xs h-8 font-medium"
               onClick={() => {
                 setShowTemplates((v) => !v);
                 setShowVersions(false);
               }}
             >
               <LayoutTemplate className="w-3.5 h-3.5" />
-              תבניות מוכנות (חינם)
+              תבניות מוכנות
             </Button>
 
             {snapshots.length > 0 && (
               <Button
-                variant={showVersions ? "default" : "ghost"}
+                variant={showVersions ? "default" : "outline"}
                 size="sm"
-                className="gap-1.5 text-xs h-8"
+                className="gap-1.5 text-xs h-8 font-medium"
                 onClick={() => {
                   setShowVersions((v) => !v);
                   setShowTemplates(false);
                 }}
               >
                 <History className="w-3.5 h-3.5" />
-                גרסאות ({snapshots.length})
+                היסטוריית גרסאות ({snapshots.length})
                 {showVersions ? (
                   <ChevronUp className="w-3 h-3" />
                 ) : (
@@ -609,21 +670,16 @@ export default function DashboardPage() {
                 )}
               </Button>
             )}
-
-            <div className="mr-auto hidden sm:flex items-center gap-1 text-xs text-muted-foreground">
-              <ShieldCheck className="w-3.5 h-3.5 text-primary" />
-              <span>הגנת קרדיטים פעילה</span>
-            </div>
           </div>
 
-          {/* Panels */}
+          {/* Expandable Drawers */}
           {showTemplates && (
-            <div className="border-b border-border bg-card/40">
+            <div className="border-b border-border bg-card">
               <TemplatesPanel onSelect={loadTemplate} />
             </div>
           )}
           {showVersions && (
-            <div className="border-b border-border bg-card/40">
+            <div className="border-b border-border bg-card">
               <VersionHistory
                 snapshots={snapshots}
                 currentVersion={currentVersion}
@@ -632,8 +688,8 @@ export default function DashboardPage() {
             </div>
           )}
 
-          {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {/* Conversation Stream */}
+          <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
             {messages.map((msg) => (
               <div
                 key={msg.id}
@@ -642,17 +698,17 @@ export default function DashboardPage() {
                 }`}
               >
                 <div
-                  className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words ${
+                  className={`max-w-[82%] rounded-xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words border ${
                     msg.role === "user"
-                      ? "bg-primary text-primary-foreground rounded-tr-sm"
-                      : "bg-muted text-foreground rounded-tl-sm"
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-card text-foreground border-border shadow-sm"
                   }`}
                 >
                   {msg.content}
                   {msg.role === "assistant" &&
                     msg.id !== "welcome" &&
                     msg.content === "" && (
-                      <span className="inline-flex gap-0.5">
+                      <span className="inline-flex gap-1 py-1">
                         <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce [animation-delay:0ms]" />
                         <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce [animation-delay:150ms]" />
                         <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce [animation-delay:300ms]" />
@@ -664,31 +720,28 @@ export default function DashboardPage() {
             <div ref={messagesEndRef} />
           </div>
 
-          {/* Mobile: Phone + Build button */}
-          <div className="lg:hidden flex flex-col items-center gap-3 p-3 border-t border-border bg-card/40">
+          {/* Mobile Action Bar */}
+          <div className="lg:hidden flex flex-col items-center gap-2 p-3 border-t border-border bg-card/60">
             {currentCode ? (
               <div className="w-full flex flex-col gap-2">
                 {buildStatus === "idle" && (
                   <Button onClick={buildApk} className="w-full gap-2" size="sm">
                     <Download className="w-4 h-4" />
-                    ייצא APK
-                    <Badge variant="secondary" className="text-xs">
-                      20 קרדיטים
-                    </Badge>
+                    ייצא APK (20 קרדיטים)
                   </Button>
                 )}
                 {buildStatus === "building" && (
-                  <div className="flex items-center justify-center gap-2 p-2">
+                  <div className="flex items-center justify-center gap-2 p-1.5">
                     <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                    <span className="text-sm text-muted-foreground">
-                      בונה... ~75 שניות
+                    <span className="text-xs text-muted-foreground">
+                      מקמפל APK... ~75 שניות
                     </span>
                   </div>
                 )}
                 {buildStatus === "ready" && apkUrl && (
                   <Button
                     onClick={() => setShowApkModal(true)}
-                    className="w-full gap-2 bg-green-600 hover:bg-green-700 text-white"
+                    className="w-full gap-2 bg-emerald-600 hover:bg-emerald-700 text-white"
                     size="sm"
                   >
                     <QrCode className="w-4 h-4" />
@@ -698,41 +751,43 @@ export default function DashboardPage() {
               </div>
             ) : (
               <p className="text-xs text-muted-foreground">
-                תאר אפליקציה או בחר תבנית לתצוגה מקדימה
+                הזן מפרט אפליקציה או בחר תבנית מוכנה
               </p>
             )}
           </div>
 
-          {/* Input */}
-          <div className="flex gap-2 p-3 border-t border-border bg-card flex-shrink-0 items-center">
-            <Button
-              onClick={sendMessage}
-              disabled={isStreaming || !input.trim()}
-              size="icon"
-              className="flex-shrink-0 h-10 w-10"
-            >
-              {isStreaming ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Send className="w-4 h-4" />
-              )}
-            </Button>
-            <Textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              maxLength={1500}
-              placeholder={
-                phase === "idle"
-                  ? "תאר את האפליקציה שלך (10 קרדיטים ליצירה מלאה)..."
-                  : phase === "architect"
-                  ? "ענה על שאלות ה-AI כדי לבנות את האפליקציה (כלול במחיר)..."
-                  : "בקש שינוי או תוספת (2 קרדיטים לעריכה)..."
-              }
-              className="resize-none min-h-0 h-10 py-2.5 flex-1"
-              disabled={isStreaming}
-              rows={1}
-            />
+          {/* Prompt Composer */}
+          <div className="p-3 sm:p-4 border-t border-border bg-card flex-shrink-0">
+            <div className="max-w-4xl mx-auto flex gap-2 items-center">
+              <Button
+                onClick={sendMessage}
+                disabled={isStreaming || !input.trim()}
+                size="icon"
+                className="flex-shrink-0 h-10 w-10 rounded-lg"
+              >
+                {isStreaming ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Send className="w-4 h-4" />
+                )}
+              </Button>
+              <Textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                maxLength={1500}
+                placeholder={
+                  phase === "idle"
+                    ? "תאר את האפליקציה שברצונך לפתח..."
+                    : phase === "architect"
+                    ? "הזן את תשובותיך לשאלות האפיון..."
+                    : "תאר שינוי או פיצ'ר נוסף לעדכון באפליקציה..."
+                }
+                className="resize-none min-h-0 h-10 py-2.5 flex-1 rounded-lg"
+                disabled={isStreaming}
+                rows={1}
+              />
+            </div>
           </div>
         </div>
       </div>
@@ -741,18 +796,18 @@ export default function DashboardPage() {
       <Dialog open={showApkModal} onOpenChange={setShowApkModal}>
         <DialogContent className="sm:max-w-md text-right" dir="rtl">
           <DialogHeader>
-            <DialogTitle className="text-xl font-bold flex items-center gap-2">
-              🎉 ה-APK שלך מוכן להתקנה!
+            <DialogTitle className="text-lg font-bold">
+              קובץ ההתקנה (APK) מוכן
             </DialogTitle>
             <DialogDescription>
-              סרוק את הברקוד עם מצלמת הטלפון או לחץ על כפתור ההורדה הישירה.
+              סרוק את קוד ה-QR באמצעות מצלמת המכשיר או הורד את הקובץ ישירות.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="flex flex-col items-center gap-5 py-4">
+          <div className="flex flex-col items-center gap-5 py-3">
             {apkUrl && (
-              <div className="bg-white p-4 rounded-2xl border shadow-sm">
-                <QRCodeSVG value={apkUrl} size={180} />
+              <div className="bg-white p-4 rounded-xl border border-border shadow-sm">
+                <QRCodeSVG value={apkUrl} size={176} />
               </div>
             )}
 
@@ -760,19 +815,19 @@ export default function DashboardPage() {
               <a
                 href={apkUrl}
                 download="vibeapp-release.apk"
-                className="w-full flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white rounded-xl py-3 px-4 font-semibold text-sm transition-colors"
+                className="w-full flex items-center justify-center gap-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg py-2.5 px-4 font-semibold text-sm transition-colors"
               >
                 <Download className="w-4 h-4" />
-                הורד קובץ APK ישירות
+                הורדת קובץ APK
               </a>
             )}
 
-            <div className="w-full bg-muted/60 rounded-xl p-4 text-xs space-y-2 text-foreground">
-              <p className="font-bold text-sm">איך מתקינים באנדרואיד (3 שלבים):</p>
+            <div className="w-full bg-secondary/50 border border-border rounded-lg p-3.5 text-xs space-y-1.5 text-foreground">
+              <p className="font-semibold">הנחיות התקנה באנדרואיד:</p>
               <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
-                <li>סרוק את ה-QR או לחץ על כפתור ההורדה בטלפון.</li>
-                <li>פתח את הקובץ שירד ואשר &quot;התקנה ממקור לא מוכר&quot; במידה ונשאל.</li>
-                <li>לחץ &quot;התקן&quot; — והאפליקציה שלך תופיע על מסך הבית!</li>
+                <li>הורד את הקובץ למכשיר הנייד ופתח אותו.</li>
+                <li>אם מופיעה הודעת אבטחה, אשר &quot;התקנה ממקור זה&quot;.</li>
+                <li>לחץ על &quot;התקן&quot; להשלמת ההתקנה.</li>
               </ol>
             </div>
           </div>

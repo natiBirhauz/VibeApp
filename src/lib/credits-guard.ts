@@ -37,6 +37,30 @@ export function checkRateLimit(identifier: string): { allowed: boolean; retryAft
   return { allowed: true };
 }
 
+import { createClient } from "@/lib/supabase/server";
+
+/**
+ * Resolves the authenticated user ID from Supabase session cookies.
+ * In production (when Supabase is configured), it strictly requires a valid session
+ * and ignores any client-supplied userId to prevent ID spoofing!
+ * In local demo mode (when Supabase is not configured), it falls back to the demo user ID.
+ */
+export async function getVerifiedUserId(fallbackUserId?: string): Promise<string | null> {
+  if (!isSupabaseConfigured()) {
+    return fallbackUserId || "00000000-0000-0000-0000-000000000001";
+  }
+
+  try {
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    return user?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function isSupabaseConfigured(): boolean {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -52,3 +76,4 @@ export function isOpenAIConfigured(): boolean {
   const key = process.env.OPENAI_API_KEY;
   return Boolean(key && key.startsWith("sk-") && key !== "sk-...");
 }
+

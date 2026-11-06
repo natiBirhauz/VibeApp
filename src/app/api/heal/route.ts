@@ -5,6 +5,7 @@ import { getHealingPrompt, stripMarkdown } from "@/lib/ai/prompts";
 import {
   LIMITS,
   checkRateLimit,
+  getVerifiedUserId,
   isOpenAIConfigured,
   isSupabaseConfigured,
 } from "@/lib/credits-guard";
@@ -15,11 +16,16 @@ export const maxDuration = 30;
 const CODER_MODEL = process.env.CODER_MODEL ?? "gpt-4o";
 
 export async function POST(req: NextRequest) {
-  const { brokenCode, errorMessage, userId } = (await req.json()) as {
+  const { brokenCode, errorMessage, userId: clientUserId } = (await req.json()) as {
     brokenCode: string;
     errorMessage: string;
     userId: string;
   };
+
+  const userId = await getVerifiedUserId(clientUserId);
+  if (!userId) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
 
   if (!brokenCode || !errorMessage) {
     return NextResponse.json({ error: "Missing parameters" }, { status: 400 });

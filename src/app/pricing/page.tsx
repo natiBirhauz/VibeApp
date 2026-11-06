@@ -2,54 +2,55 @@
 
 import React, { useState } from "react";
 import Link from "next/link";
-import { Check, Zap, ArrowRight, Loader2, ShieldCheck } from "lucide-react";
+import { Check, ArrowLeft, Loader2, Smartphone } from "lucide-react";
 import { toast } from "sonner";
 
 const PLANS = [
   {
     id: "starter",
     name: "Starter",
-    nameHe: "מתחיל",
+    nameHe: "חבילת בסיס",
     credits: 50,
     price: 19,
+    description: "מתאים לבניית אפליקציה ראשונה ובדיקת היתכנות.",
     features: [
-      "50 קרדיטים (ללא תוקף)",
-      "5 יצירות אפליקציה מלאות",
-      "25 עריכות ושיפורי AI",
-      "2 ייצואי APK חתומים לאנדרואיד",
+      "50 קרדיטים בחשבון (ללא תאריך תפוגה)",
+      "עד 5 פרויקטים מלאים מאפס",
+      "25 סבבי עריכה ושיפורים",
+      "2 ייצואי קובץ APK חתום",
     ],
-    color: "border-border",
-    badge: null,
+    highlighted: false,
   },
   {
     id: "pro",
-    name: "Pro",
-    nameHe: "מקצועי",
+    name: "Professional",
+    nameHe: "חבילה מקצועית",
     credits: 150,
     price: 49,
+    description: "לעסקים ויוצרים הבונים מספר אפליקציות וגרסאות.",
     features: [
-      "150 קרדיטים (חיסכון של 15%)",
-      "15 יצירות אפליקציה מלאות",
-      "75 עריכות ושיפורי AI",
-      "7 ייצואי APK חתומים לאנדרואיד",
+      "150 קרדיטים בחשבון (ללא תאריך תפוגה)",
+      "עד 15 פרויקטים מלאים מאפס",
+      "75 סבבי עריכה ושיפורים",
+      "7 ייצואי קובץ APK חתום",
     ],
-    color: "border-primary",
-    badge: "הכי משתלם",
+    highlighted: true,
+    badge: "מומלץ",
   },
   {
     id: "studio",
-    name: "Studio",
-    nameHe: "סטודיו",
+    name: "Agency / Studio",
+    nameHe: "חבילת סטודיו",
     credits: 400,
     price: 99,
+    description: "לסוכנויות ומפתחים המייצרים אפליקציות עבור לקוחות.",
     features: [
-      "400 קרדיטים (חיסכון של 35%)",
-      "40 יצירות אפליקציה מלאות",
-      "200 עריכות ושיפורי AI",
-      "20 ייצואי APK חתומים לאנדרואיד",
+      "400 קרדיטים בחשבון (ללא תאריך תפוגה)",
+      "עד 40 פרויקטים מלאים מאפס",
+      "200 סבבי עריכה ושיפורים",
+      "20 ייצואי קובץ APK חתום",
     ],
-    color: "border-border",
-    badge: null,
+    highlighted: false,
   },
 ];
 
@@ -73,7 +74,7 @@ export default function PricingPage() {
       if (!res.ok || !data.url) {
         toast.error(
           data.error ??
-            "שער התשלום טרם הוגדר בקובץ הסביבה (.env.local). הגדר מפתח Stripe/PayPlus להפעלת סליקה."
+            "שער הסליקה טרם חובר במשתני הסביבה ב-Vercel (PayPlus / Grow / Morning)."
         );
         return;
       }
@@ -86,124 +87,148 @@ export default function PricingPage() {
   };
 
   return (
-    <main className="min-h-screen bg-background py-16 px-4" dir="rtl">
-      <div className="max-w-4xl mx-auto space-y-10">
-        {/* Header */}
-        <div className="text-center space-y-3">
-          <h1 className="text-3xl font-bold text-foreground">רכישת קרדיטים</h1>
-          <p className="text-muted-foreground">
-            קרדיטים לא פגים לעולם. שלם פעם אחת (ללא מנוי מתחדש), השתמש מתי שתרצה.
-          </p>
-        </div>
-
-        {/* Fair-Charge Guarantee Banner */}
-        <div className="bg-primary/5 border border-primary/20 rounded-2xl p-4 flex items-center gap-3 text-sm">
-          <ShieldCheck className="w-6 h-6 text-primary flex-shrink-0" />
-          <div>
-            <p className="font-semibold text-foreground">
-              הגנת קרדיטים מלאה (Fair-Use Guarantee)
-            </p>
-            <p className="text-muted-foreground text-xs mt-0.5">
-              תיקוני באגים אוטומטיים (Auto-Heal) הם בחינם לגמרי. אם בנייה או קריאת AI נכשלת — הקרדיטים מוחזרים לחשבונך אוטומטית.
-            </p>
-          </div>
-        </div>
-
-        {/* Credit costs */}
-        <div className="bg-muted/40 border border-border rounded-2xl p-4 text-sm text-muted-foreground">
-          <p className="font-semibold text-foreground mb-2">מחירון פעולות שקוף:</p>
-          <div className="grid grid-cols-3 gap-2 text-center">
-            <div className="bg-background rounded-xl p-3">
-              <p className="text-base font-bold text-foreground">10</p>
-              <p>יצירת אפליקציה חדשה (כולל אפיון + קוד)</p>
+    <div className="min-h-screen bg-background flex flex-col" dir="rtl">
+      {/* Top Navbar */}
+      <header className="border-b border-border bg-card/80 backdrop-blur-md">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
+          <Link href="/" className="flex items-center gap-2">
+            <div className="w-8 h-8 bg-foreground text-background rounded-lg flex items-center justify-center">
+              <Smartphone className="w-4 h-4" />
             </div>
-            <div className="bg-background rounded-xl p-3">
-              <p className="text-base font-bold text-foreground">2</p>
-              <p>עריכה / הוספת פיצ&apos;ר</p>
-            </div>
-            <div className="bg-background rounded-xl p-3">
-              <p className="text-base font-bold text-foreground">20</p>
-              <p>ייצוא קובץ APK חתום</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Plans */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {PLANS.map((plan) => {
-            const isLoading = loadingPlan === plan.id;
-            return (
-              <div
-                key={plan.id}
-                className={`relative bg-card border-2 ${plan.color} rounded-2xl p-6 flex flex-col gap-4 shadow-sm`}
-              >
-                {plan.badge && (
-                  <div className="absolute -top-3 right-6 bg-primary text-primary-foreground text-xs font-bold px-3 py-1 rounded-full">
-                    {plan.badge}
-                  </div>
-                )}
-
-                <div>
-                  <p className="text-sm text-muted-foreground">{plan.name}</p>
-                  <h2 className="text-2xl font-bold text-foreground">
-                    {plan.nameHe}
-                  </h2>
-                </div>
-
-                <div className="flex items-end gap-1">
-                  <span className="text-4xl font-extrabold text-foreground">
-                    ₪{plan.price}
-                  </span>
-                  <span className="text-muted-foreground mb-1">/ חד פעמי</span>
-                </div>
-
-                <div className="flex items-center gap-2 bg-primary/10 rounded-xl p-3">
-                  <Zap className="w-5 h-5 text-primary flex-shrink-0" />
-                  <span className="font-bold text-primary">
-                    {plan.credits} קרדיטים
-                  </span>
-                </div>
-
-                <ul className="space-y-2">
-                  {plan.features.map((f) => (
-                    <li
-                      key={f}
-                      className="flex items-center gap-2 text-sm text-foreground"
-                    >
-                      <Check className="w-4 h-4 text-primary flex-shrink-0" />
-                      {f}
-                    </li>
-                  ))}
-                </ul>
-
-                <button
-                  onClick={() => handleCheckout(plan.id)}
-                  disabled={loadingPlan !== null}
-                  className="mt-auto w-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors rounded-xl py-3 font-semibold flex items-center justify-center gap-2"
-                >
-                  {isLoading ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <>
-                      רכוש עכשיו
-                      <ArrowRight className="w-4 h-4" />
-                    </>
-                  )}
-                </button>
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="text-center">
+            <span className="font-bold text-foreground">VibeApp</span>
+          </Link>
           <Link
             href="/dashboard"
-            className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+            className="text-xs sm:text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
           >
-            ← חזור לדשבורד
+            חזרה לסביבת העבודה ←
           </Link>
         </div>
-      </div>
-    </main>
+      </header>
+
+      <main className="flex-1 py-14 px-4 sm:px-6">
+        <div className="max-w-5xl mx-auto space-y-12">
+          {/* Header */}
+          <div className="text-center space-y-3 max-w-xl mx-auto">
+            <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-foreground font-rubik">
+              תמחור שקוף לפי שימוש
+            </h1>
+            <p className="text-muted-foreground text-sm sm:text-base">
+              תשלום חד-פעמי ללא מנוי חודשי מתחדש. הקרדיטים נשמרים בחשבונך ללא הגבלת זמן.
+            </p>
+          </div>
+
+          {/* Plans Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {PLANS.map((plan) => {
+              const isLoading = loadingPlan === plan.id;
+              return (
+                <div
+                  key={plan.id}
+                  className={`relative bg-card rounded-xl p-6 flex flex-col justify-between border transition-all ${
+                    plan.highlighted
+                      ? "border-primary shadow-md ring-1 ring-primary/20"
+                      : "border-border shadow-sm"
+                  }`}
+                >
+                  {plan.badge && (
+                    <div className="absolute -top-3 left-6 bg-primary text-primary-foreground text-[11px] font-semibold px-2.5 py-0.5 rounded-md">
+                      {plan.badge}
+                    </div>
+                  )}
+
+                  <div className="space-y-5">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                        {plan.name}
+                      </p>
+                      <h2 className="text-xl font-bold text-foreground mt-0.5">
+                        {plan.nameHe}
+                      </h2>
+                      <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">
+                        {plan.description}
+                      </p>
+                    </div>
+
+                    <div className="flex items-baseline gap-1.5 pb-4 border-b border-border">
+                      <span className="text-4xl font-extrabold text-foreground tracking-tight">
+                        ₪{plan.price}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        / תשלום חד-פעמי ({plan.credits} קרדיטים)
+                      </span>
+                    </div>
+
+                    <ul className="space-y-2.5">
+                      {plan.features.map((f) => (
+                        <li
+                          key={f}
+                          className="flex items-start gap-2.5 text-sm text-foreground"
+                        >
+                          <Check className="w-4 h-4 text-primary flex-shrink-0 mt-0.5" />
+                          <span>{f}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <button
+                    onClick={() => handleCheckout(plan.id)}
+                    disabled={loadingPlan !== null}
+                    className={`mt-8 w-full rounded-lg py-2.5 px-4 text-sm font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50 ${
+                      plan.highlighted
+                        ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                        : "bg-secondary text-secondary-foreground hover:bg-secondary/80 border border-border"
+                    }`}
+                  >
+                    {isLoading ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <>
+                        רכישת חבילה
+                        <ArrowLeft className="w-4 h-4" />
+                      </>
+                    )}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Credit Usage Breakdown Table */}
+          <div className="bg-card border border-border rounded-xl p-6 max-w-3xl mx-auto">
+            <h3 className="text-sm font-bold text-foreground mb-4">
+              טבלת תעריפי פעולות במערכת
+            </h3>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+              <div className="p-3.5 rounded-lg bg-secondary/40 border border-border">
+                <div className="font-bold text-foreground text-base">
+                  10 קרדיטים
+                </div>
+                <div className="text-xs text-muted-foreground mt-0.5">
+                  אפיון ובניית אפליקציה חדשה
+                </div>
+              </div>
+              <div className="p-3.5 rounded-lg bg-secondary/40 border border-border">
+                <div className="font-bold text-foreground text-base">
+                  2 קרדיטים
+                </div>
+                <div className="text-xs text-muted-foreground mt-0.5">
+                  עדכון עיצוב או הוספת פיצ&apos;ר
+                </div>
+              </div>
+              <div className="p-3.5 rounded-lg bg-secondary/40 border border-border">
+                <div className="font-bold text-foreground text-base">
+                  20 קרדיטים
+                </div>
+                <div className="text-xs text-muted-foreground mt-0.5">
+                  קומפילציית Cloud APK חתום
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
   );
 }

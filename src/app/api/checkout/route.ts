@@ -1,13 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPaymentProvider } from "@/lib/payments/provider";
+import { getVerifiedUserId } from "@/lib/credits-guard";
 
 export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
-  const { packageId, userId } = await req.json() as {
+  const { packageId, userId: clientUserId } = (await req.json()) as {
     packageId: string;
     userId: string;
   };
+
+  const userId = await getVerifiedUserId(clientUserId);
+  if (!userId) {
+    return NextResponse.json(
+      { error: "יש להתחבר לחשבון לפני רכישת קרדיטים." },
+      { status: 401 }
+    );
+  }
 
   const origin = req.headers.get("origin") ?? "http://localhost:3000";
 

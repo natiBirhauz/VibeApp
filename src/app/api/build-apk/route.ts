@@ -3,6 +3,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import {
   CREDIT_COSTS,
   checkRateLimit,
+  getVerifiedUserId,
   isSupabaseConfigured,
 } from "@/lib/credits-guard";
 
@@ -13,12 +14,20 @@ const GITHUB_REPO = process.env.GITHUB_REPO ?? "VibeApp";
 const GITHUB_PAT = process.env.GITHUB_PAT ?? "";
 
 export async function POST(req: NextRequest) {
-  const { projectId, userId, appName, appCode } = (await req.json()) as {
+  const { projectId, userId: clientUserId, appName, appCode } = (await req.json()) as {
     projectId: string;
     userId: string;
     appName: string;
     appCode?: string;
   };
+
+  const userId = await getVerifiedUserId(clientUserId);
+  if (!userId) {
+    return NextResponse.json(
+      { error: "יש להתחבר לחשבון כדי לייצא קובץ APK." },
+      { status: 401 }
+    );
+  }
 
   // Rate limit build triggers
   const ip = req.headers.get("x-forwarded-for") ?? userId ?? "anon";

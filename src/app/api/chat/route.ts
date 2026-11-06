@@ -10,6 +10,7 @@ import {
   CREDIT_COSTS,
   LIMITS,
   checkRateLimit,
+  getVerifiedUserId,
   isOpenAIConfigured,
   isSupabaseConfigured,
 } from "@/lib/credits-guard";
@@ -26,7 +27,7 @@ export async function POST(req: NextRequest) {
   const {
     message,
     phase,
-    userId,
+    userId: clientUserId,
     projectId,
     userDescription,
     answers,
@@ -40,6 +41,15 @@ export async function POST(req: NextRequest) {
     answers?: string;
     currentCode?: string;
   };
+
+  // Verify user session (prevents ID spoofing in production)
+  const userId = await getVerifiedUserId(clientUserId);
+  if (!userId) {
+    return NextResponse.json(
+      { error: "יש להתחבר לחשבון כדי להשתמש ב-AI." },
+      { status: 401 }
+    );
+  }
 
   // 1. Validate input length to prevent token abuse
   if (!message || message.trim().length === 0) {
